@@ -1,0 +1,208 @@
+---
+title: 'Report Exercise 9: Supervised Machine Learning I'
+author: 'Noémie Wellinger'
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+    toc: yes
+    toc_float: yes
+    number_sections : yes
+---
+# Introduction
+In this exercise, basic implementation steps of supervised machine learning are explored. These include pre-processing data, model fitting, testing the model’s generasbility to unseen data and evaluating model hyperparameters such as k in an KNN model.
+
+
+# Methods 
+## Setup and preprocessing
+```{r setup, include=T, message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(recipes)
+library(tidyr)
+library(yardstick)
+library(zoo)
+```
+
+## Data Wrangling
+Daily fluxes dataset is read in and 
+```{r wrangle, include=T, message=F}
+daily_fluxes <- read_csv("../data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv") |>  
+  
+  # select only the variables we are interested in
+  select(TIMESTAMP,
+                GPP_NT_VUT_REF,    # the target
+                ends_with("_QC"),  # quality control info
+                ends_with("_F"),   # includes all all meteorological covariates
+                -contains("JSB")   # weird useless variable
+                ) |>
+
+  # convert to a nice date object
+  mutate(TIMESTAMP = ymd(TIMESTAMP)) |>
+
+  # set all -9999 to NA
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  
+  # retain only data based on >=80% good-quality measurements
+  # overwrite bad data with NA (not dropping rows)
+  mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+
+  # drop QC variables (no longer needed)
+  select(-ends_with("_QC"))
+```
+
+```{r hist_GPP, warning=F, message=F, fig.cap="Figure 1: Histogram of GPP observation values"}
+# Data cleaning: looks ok, no obviously bad data
+# no long tail, therefore no further target engineering
+daily_fluxes |> 
+  ggplot(aes(x = GPP_NT_VUT_REF, y = after_stat(count))) + 
+  geom_histogram()
+```
+
+## Preprocessing
+The function `split_train_test` is defined, which splits the FLUXNET dataset into training and test data.
+A model recipe is formulated. This will stay the same for all the models.
+Finally, a linear regression model and a knn model with k=8 are fitted.
+```{r preprocess, message=F, warning=F}
+# load and run the data splitting function
+source("../R/split_train_test.R")
+split <- split_train_test(data=daily_fluxes, prop=0.7)
+daily_fluxes_train <- split$train
+daily_fluxes_test <- split$test
+
+# Model and pre-processing formulation, use all variables but LW_IN_F
+pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = daily_fluxes_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+```
+
+```{r fit_models, message=F, warning=F}
+# Fit linear regression model
+mod_lm <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "lm",
+  trControl = caret::trainControl(method = "none"),
+  metric = "RMSE"
+)
+
+# Fit KNN model
+mod_knn <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "knn",
+  trControl = caret::trainControl(method = "none"),
+  tuneGrid = data.frame(k = 8),
+  metric = "RMSE"
+)
+```
+
+# Comparison of the linear regression and KNN models
+## Methods and Results
+The function `eval_model` Evaluate model performance and plots it in a chosen way.
+```{r load_eval_model, message=F, warning=F}
+# Load the function definition
+source("../R/eval_model.R")
+```
+
+First, let's compare the performance of linear and knn models on the test and train dataset.
+```{r eval_lm, warning=F, message=F, fig.cap="Figure 2: Comparison of linear regression model performance"}
+# linear regression model
+eval_model(mod = mod_lm, df_train = daily_fluxes_train, df_test = daily_fluxes_test, plots = "scatter")
+```
+
+```{r eval_knn, warning=F, message=F, fig.cap="Figure 3: Comparison of knn model performance"}
+# KNN
+eval_model(mod = mod_knn, df_train = daily_fluxes_train, df_test = daily_fluxes_test, plots = "scatter")
+```
+
+## Discussion
+### Interpretation of observed differences in the context of the bias-variance trade-off
+*Questions*
+Why is the difference between the evaluation on the training and the test set larger for the KNN model than for the linear regression model?
+    Why is the does the evaluation on the test set indicate a better model performance of the KNN model than the linear regression model?
+    How would you position the KNN and the linear regression model along the spectrum of the bias-variance trade-off?
+*Answers*    
+KNN, in contrast to linear regression is a machine learning approach. It can deal better with non-linearity than linear regression and knowledge of the “local” data structure for prediction. This however, makes KNN also more prone to overfitting, meaning that it is very well trained to the training dataset, but can fail at generalizing when predicting data it has never seen. In contrast, linear regression estimates the relationship between variables based on the overall data patterns. The overfitting of the KNN model is noticeable on the plots where the difference between the evaluation on the training and the test set is larger for the KNN model than for the linear regression model. 
+The KNN model is clearly better in bias-variance trade-off than the linear model, explaining more of the variance (higher $R^2$) and having a lower bias/RMSE.
+
+
+### Temporal variations of observed and modelled GPP 
+for both models, covering all available dates.
+```{r temporal_lm, warning=F, message=F, fig.cap="Figure 4: Temporal variations of observed and modelled GPP using the linear regression model"}
+eval_model(mod = mod_lm, df_train = daily_fluxes_train, df_test = daily_fluxes_test, plots = "temporal")
+  
+```
+
+```{r temporal_knn, warning=F, message=F, fig.cap="Figure 5: Temporal variations of observed and modelled GPP using the KNN model"}
+eval_model(mod = mod_knn, df_train = daily_fluxes_train, df_test = daily_fluxes_test, plots = "temporal")
+```
+
+# The role of K
+Let’s look at the role of k in a KNN and answer the following questions:
+
+## Hypothesis
+1. Based on your understanding of KNN (and without running code), state a hypothesis for how the R2 and the MAE evaluated on the test and on the training set would change for k approaching 1 and for k approaching N (the number of observations in the data). Explain your hypothesis, referring to the bias-variance trade-off.
+
+*K approaching 1*
+* Test data: MAE would approach 0 and R2 would approach 1. The predictions would be perfectly fitted to the training data.
+* Training data: MAE would increase drastically and R2 would decrease, because the model heavily is overfitted to the training data.
+
+*K approaching N*
+* Test data: MAE would approach the mean value of all observations and R2 would approach 0.
+* Training data: same as for the test data. 
+
+## Evaluation of different k values
+Put your hypothesis to the test! Write code that splits the data into a training and a test set and repeats model fitting and evaluation for different values for k. Visualise results, showing model generalisability as a function of model complexity. Describe how a “region” of overfitting and underfitting can be determined in your visualisation. Write (some of your) code into a function that takes k as an input and and returns the MAE determined on the test set.
+```{r tune_k, message = F, warning=F}
+split <- split_train_test(data=daily_fluxes, prop=0.7)
+daily_fluxes_train <- split$train
+daily_fluxes_test <- split$test
+
+# Model and pre-processing formulation, use all variables but LW_IN_F (same recipe as before)
+pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = daily_fluxes_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+
+# load the function
+source("../R/tune_k.R")
+# define k values that should be evaluated
+# at k = 500 we get an error:
+# Error in knnregTrain(train = c(-0.032747054350506, -0.828559168249415,  : 
+# too many ties in knn
+k_vals <- c(1, 2, 3, 4, 5, 10, 50, seq(from = 100, to = 400, by = 50))
+knn_tuning1 <- knn_tune_K(pp, daily_fluxes_train, daily_fluxes_test, k_vals)
+
+#redefine less k values
+k_vals <- c(seq(1, 10), seq(from = 11, to = 40))
+knn_tuning2 <- knn_tune_K(pp, daily_fluxes_train, daily_fluxes_test, k_vals)
+```
+
+```{r plot_knn,warning=F, message=F, fig.cap="Figure 6: Model generalisability as a function of model complexity" }
+cowplot::plot_grid(knn_tuning1$plot, knn_tuning2$plot)
+```
+Overfitting is clearly visible in the plots, where the metrics of the train and test datasets strongly diverge. This is the case for k values approaching 0. As they come closer to each other, and errors are minimized as welle as R-squared maximized, we reach the sweet spot of bias-variance trade-off. With increasing k values, the errors increase and R-squared decrease again, indicating underfitting. The knn model failed to compute with a k-value of 500, which is why the left plot (Fig. 6) only reaches until 400.
+
+## The optimal k
+We are looking for a k that minimizes the RMSE and maximizes R-squared on the test set.
+The "optimal" k in terms of model generalizability according to this analysis is:
+```{r bestK, message=F}
+knn_tuning2$bestK
+```
+
+
+
+

@@ -1,0 +1,153 @@
+---
+title: 'Report Exercise 10: Supervised Machine Learning II'
+author: 'Noémie Wellinger'
+date: "`r Sys.Date()`"
+output: 
+ html_document:
+    toc: yes
+    toc_float: yes
+    number_sections : yes
+---
+
+# Introduction
+This exercises further covers the process of supervised machine learning. Mainly, we look at the concept of the loss, and choosing right level of model complexity for optimal model generalisability as part of the model training step. 
+
+We explore the role of structure in the data for model generalisability and how to best estimate a “true” out-of-sample error that corresponds to the prediction task. The task here is to train a model on ecosystem flux observations from one site and predict to another site (spatially upscaling). In previous examples and exercises, we always trained and predicted within the same site. How well is a model generalisable to a new site?
+
+We investigate this question using ecosystem flux data from two distinct sites: Davos and Laegern. Again, use KNN and tune K for each model. Both sites are registered in the FLUXNET network.
+
+# Methods 
+## Setup and preprocessing
+```{r setup, include=T, message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(recipes)
+library(tidyr)
+library(yardstick)
+library(zoo)
+```
+
+## Data Wrangling
+Daily fluxes datasets from the FLUXNET network for the two sites Davos and Laegern are loaded and wrangled.
+Because the timeseries of Davos (1997-2014) is longer than the one of Laegern (2004-2014), we crop the Davos dataset until 2004 as well to ensure comparability of the two models.
+```{r wrangle, include=T, message=F}
+daily_fluxes_Dav <- read_csv("../data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv") |>  
+  
+  # select only the variables we are interested in
+  select(TIMESTAMP,
+                GPP_NT_VUT_REF,    # the target
+                ends_with("_QC"),  # quality control info
+                ends_with("_F"),   # includes all all meteorological covariates
+                -contains("JSB")   # weird useless variable
+                ) |>
+
+  # convert to a nice date object
+  mutate(TIMESTAMP = ymd(TIMESTAMP)) |>
+
+  # set all -9999 to NA
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  
+  # retain only data based on >=80% good-quality measurements
+  # overwrite bad data with NA (not dropping rows)
+  mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+
+  # drop QC variables (no longer needed)
+  select(-ends_with("_QC")) |>
+  
+  # crop the years 1997-2003
+  filter(year(TIMESTAMP) > 2003)
+```
+
+```{r hist_GPP, warning=F, message=F, fig.cap="Figure 1: Histogram of GPP observation values"}
+# Data cleaning: looks ok, no obviously bad data
+# no long tail, therefore no further target engineering
+daily_fluxes_Dav |> 
+  ggplot(aes(x = GPP_NT_VUT_REF, y = after_stat(count))) + 
+  geom_histogram()
+```
+
+```{r wrangle, include=T, message=F}
+daily_fluxes_Lae <- read_csv("../data/FLX_CH-Lae_FLUXNET2015_FULLSET_DD_2004-2014_1-4.csv") |>  
+  
+  # select only the variables we are interested in
+  select(TIMESTAMP,
+                GPP_NT_VUT_REF,    # the target
+                ends_with("_QC"),  # quality control info
+                ends_with("_F"),   # includes all all meteorological covariates
+                -contains("JSB")   # weird useless variable
+                ) |>
+
+  # convert to a nice date object
+  mutate(TIMESTAMP = ymd(TIMESTAMP)) |>
+
+  # set all -9999 to NA
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  
+  # retain only data based on >=80% good-quality measurements
+  # overwrite bad data with NA (not dropping rows)
+  mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+
+  # drop QC variables (no longer needed)
+  select(-ends_with("_QC"))
+```
+
+```{r hist_GPP, warning=F, message=F, fig.cap="Figure 1: Histogram of GPP observation values"}
+# Data cleaning: looks ok, no obviously bad data
+# no long tail, therefore no further target engineering
+daily_fluxes_Lae |> 
+  ggplot(aes(x = GPP_NT_VUT_REF, y = after_stat(count))) + 
+  geom_histogram()
+```
+
+
+## Preprocessing
+The function `split_train_test` is defined, which splits the FLUXNET dataset into training and test data.
+80% of the data are used for training, 20% for testing.
+A model recipe is formulated. This will stay the same for all the models.
+```{r preprocess, message=F, warning=F}
+# load and run the data splitting function
+source("../R/split_train_test.R")
+split_Dav <- split_train_test(data=daily_fluxes_Dav, prop=0.8)
+Dav_train <- split_Dav$train
+Dav_test <- split_Dav$test
+
+split_Lae <- split_train_test(data=daily_fluxes_Lae, prop=0.8)
+Lae_train <- split_Lae$train
+Lae_test <- split_Lae$test
+
+# Model and pre-processing formulation, use all variables but LW_IN_F
+pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = daily_fluxes_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+```
+
+* Compare within-site predictions and across-site predictions on the test set for both sites, considering different metrics. For across-site predictions, make sure to implement a train and test setup that enables a true out-of-sample prediction test.
+
+* Train a single model with training data pooled from both sites and predict with this single model on the test data of both sites. How do the model metrics on the test set compare to the true out-of-sample setup above? Interpret differences. Is it a valid approach to perform model training like this? Use your knowledge about structure in the data and its relevance for the model training setup.
+
+* Get information about the characteristics of the two sites. What are the differences in terms of climate, vegetation, altitude, etc. between the Davos and Laegern sites? Interpret biases of the out-of-sample predictions with a view to the site characteristics.
+
+
+```{r}
+
+```
+

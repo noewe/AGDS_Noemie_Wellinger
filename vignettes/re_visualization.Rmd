@@ -1,0 +1,145 @@
+---
+title: "Telling a story from data"
+author: 'Noémie Wellinger'
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+In the previous exercises and tutorials, you have learned how to wrangle data, fit simple linear regression models and identify outliers, create figures for temporal patterns, and develop and test hypotheses. Use these skills to tell a story about the airquality dataset (directly available in R, just type datasets::airquality into the console).
+
+Your solution has to include:
+
+    At least three publishable figures that show important patterns (e.g., outliers, temporal patterns, scatterplots of correlations, etc.)
+    A description of the data that includes at least three statistical metrics that are relevant for the problem (argue for why you chose these metrics).
+    Interpretation and discussion of your results and hypotheses. The text alone should not exceed one A4 page (max. 400 words).
+
+    Hint: To get more background information on the data, use the help functionalities in RStudio.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("PerformanceAnalytics")
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+```{r read}
+airqual <- datasets::airquality
+airqual <- airqual |>
+  mutate(row_n = c(1:length(Day)),
+         Temp_C = round((5/9)*(Temp - 32),1)) 
+airqual
+```
+
+The dataset is a 5-month daily time series (May - September) of New York air quality measurements of an unspecified year. It includes temperature [°F], wind, solar radiation and ozone concentration.
+Since ozone poses health problems, especially during hot summer days, I want to know, which of the 3 other factors correlate the most with the ozone concentration and could possibly be a causality for it.
+
+Hypotheses: 
+1. Solar radiation influcences ozone concentration.
+2. High wind speeds lower the ozone concentration.
+
+```{r}
+airqual_values <- airqual |>
+  select(Ozone, Solar.R, Temp, Wind) 
+
+pairs(airqual_values)
+
+cor(airqual_values, use = "complete.obs")
+
+chart.Correlation(airqual_values, histogram=TRUE, pch=19)
+```
+Looking at all the variables paired up in scatterplots, there seems to be a correlation between ozone and temperature, ozone and wind, as well as a slight correlation between ozone and solar radiation.
+
+
+
+```{r}
+scale = 10
+
+ggplot(airqual) +
+
+  geom_line(aes(x = row_n, y = Temp_C, color = "Temp_C"), size = 0.5) +
+  #data for the left y axis
+  #geom_line(aes(y=Temp_C, ), size=0.5, color="red") + 
+  geom_line(aes(x = row_n, y=Wind, color = "Wind"), size=0.5) +
+  #data for the right y axis
+  geom_line(aes(x = row_n, y=Ozone/scale, color="Ozone"), size=0.5) +
+  geom_line(aes(x = row_n, y=Solar.R/scale, color="Solar.R"), size=0.5) +
+  
+  scale_x_continuous(breaks = c(15, 45, 75, 105, 135), 
+                     label = c("May", "June", "July", "August", "September")) +
+  scale_y_continuous(name = "Temperature and ozone", sec.axis = sec_axis(~.*scale, name = "Wind & solar radiation")) +
+  
+  labs(
+    title = "Fig 1: Temporal pattern of variables of interest",
+    x = "Days") +
+  theme_classic() +
+  coord_fixed(ratio = 1) +
+
+  theme(legend.position = c(0.88, 1.5) ) + # Move legend into the plot
+  scale_color_manual(
+     "", # Omit legend title
+    values = c("turquoise", "yellowgreen", "salmon", "purple"),
+    labels = c("Ozone concentration",  "Solar radiation", "Temperature [°C]", "Wind speed")
+  )
+
+
+```
+
+```{r}
+airqual |>
+  drop_na(Ozone) |>
+ggplot(
+  aes(x = Temp_C, y = Wind, color = Ozone)) +
+  geom_point(size = 3) +
+  labs(title = "a) Ozone concentration for varying temperatures and wind speeds",
+       x = "Temperature (°C)",
+       y = "Wind speed (mph)") +
+  theme_classic() +
+  scale_color_viridis_c() +
+  coord_fixed(ratio = 1)
+
+airqual |>
+  drop_na(Ozone) |>
+ggplot(
+  aes(x = Temp_C, y =Solar.R, color = Ozone)) +
+  geom_point(size = 3) +
+  labs(title = "b) Ozone concentration depending on T and SR",
+       x = "Temperature (°C)",
+       y = "Solar Radiation") +
+  theme_classic() +
+  scale_color_viridis_c() +
+    coord_fixed(ratio = 0.05)
+
+
+```
+Scatterplot a) shows that high ozone concentrations mostly occur on hot days with low wind speed.
+According to scatterplot b), the temperature is essential for the formation of ozone. High solar radiation alone, is not enough to produce ozone molecules.
+
+
+
+Let's find out if a decrease in ozone from one to the next day correlates with a high wind speed as well.
+
+```{r}
+airqual |>
+  mutate(ozone_change = round((((Ozone - lag(Ozone))/lag(Ozone))*100),1)) |>
+  ggplot(
+      aes(x = Ozone, y = ozone_change, color = lag(Wind))) +
+  geom_point(size = 3) +
+  labs(title = "Ozone concentration for varying temperatures and wind speeds",
+       x = "Ozone",
+       y = "Change in Ozone (%)") +
+  theme_classic() +
+  scale_color_viridis_c()
+```
+
+WHile stratospheric ozone protects us from harmful UV-radiation, tropospheric ozone in high concentrations is harmful to plants and animals. The natural ozone concentration in the troposphere is ca. 10 parts per billion (ppb). 
+According to the Environmental Protection Agency, concentration of 70 ppb for over 8 hours poses health risks. 
+Tropospheric ozone is formed when anthropogenic emissions react with volatile organic compounds, a process which is reinforced during warm and stable atmospheric conditions [1]
+
+Let's mark the ozone concentrations which exceed 70ppb (disregarding the time of exposure). 
+
+Disclosure of assumption:
+Since the dataset is US-American, I assume that the wind speed is measured in miles per hour (mph)
+
+
+[1] 

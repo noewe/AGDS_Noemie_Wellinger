@@ -1,0 +1,196 @@
+---
+title: 'Report Exercise 8: Regression'
+author: 'Noémie Wellinger'
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+
+```
+
+
+# Read and preprocess data
+```{r, inlude = T, warning=F, message=F}
+hh_fluxes <- readr::read_csv("https://raw.githubusercontent.com/geco-bern/agds/main/data/df_for_stepwise_regression.csv")
+```
+
+```{r missing, fig.cap = "Figure 1: Missing values in the whole dataset" }
+visdat::vis_miss(
+  hh_fluxes,
+  cluster = FALSE, 
+  warn_large_data = FALSE
+  )
+```
+The variable LW_IN_F_MDS contains a lot of missing values. As noted in the AGDS script in chapter 9.2.7.2, longwave radiation is not a  strong factor for GPP and there is another non-gapfilled version of the same variable. Therefore we can drop the variable for all the subsequent models.
+
+```{r remove_missing, warning=F}
+hh_fluxes <- hh_fluxes |>
+  subset(select = -LW_IN_F_MDS)
+```
+
+
+# Analysis
+## Evaluation of all bivariate models (single predictor)
+```{r bivariate, warning=F}
+#initialize the predictors
+preds_single <- hh_fluxes |> 
+  subset(select = -c(siteid, TIMESTAMP, GPP_NT_VUT_REF)) |> # all predictors
+  drop_na()
+
+#store the predictors in a list of numeric vectors, the variable 
+remaining_candidates <- as.list(preds_single)
+#initialize df for r-squared values
+r_squared <- data.frame(pred = "init", rsq_values = 0)
+
+# loop over the predictors
+for (pred_candidate in names(remaining_candidates)){
+  
+  #specify the model, creating the formula dynamically
+  lm <- lm(formula = as.formula(paste("GPP_NT_VUT_REF ~", paste(pred_candidate, collapse = "+"))), 
+           data = hh_fluxes)
+  
+  #extract R-squared values of all predictors
+  r_squared <- r_squared |> add_row(pred = pred_candidate, 
+                       rsq_values = summary(lm)$r.squared)
+}
+  
+#determine max R-squared and corresponding variable name
+max_rsq_pred <- r_squared$pred[which.max(r_squared$rsq_values)]
+print(paste("Highest r-squared: ", max_rsq_pred, max(r_squared$rsq_values)))
+
+#store the model 
+linmod_single <- lm(formula = as.formula(paste("GPP_NT_VUT_REF ~", max_rsq_pred)), 
+           data = hh_fluxes)
+
+```
+```{r plot_lm_single, echo = F, fig.cap = "Figure 2: Best bivariate linear regression model for GPP", warning=F}
+hh_fluxes |>
+  #filter(MONTH == 8) |>
+  ggplot(aes(x = PPFD_IN, y = GPP_NT_VUT_REF)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(formula = y ~ x, method = "lm", aes(color = "lm"), se = FALSE) +
+  labs(x = "PPFD", y = "GPP", color = "Regression") +
+  theme_classic()
+```
+
+
+
+## Stepwise regression
+1. Set the number of predictors to be considered to p=1
+2. Fit all regression models with p predictors and compute their R2
+3. Select the model with p predictors that achieves the highest R2 (best fitting model) and compute its AIC.
+4. Increment to p+1. 
+   Fit all regression models with p+1 predictors and compute their R2. 
+   Select the best fitting model and compute its AIC.
+5. If the AIC of the model with p+1 predictors is poorer than the AIC of the model with p predictors, 
+   retain the model with p predictors and quit. 
+   You have found the (presumably) optimal model. Otherwise, continue with with step 4. 
+
+
+The stepwise regression function is implemented in the R file `stepwise_regression.R`.
+```{r def_func_stepwise, include=F}
+source("../R/stepwise_regression.R")
+```
+
+Let's try different sets of predictors
+```{r predictors, warning=FALSE}
+preds_stepwise1 <- hh_fluxes |> 
+  subset(select = -c(siteid, TIMESTAMP, GPP_NT_VUT_REF)) |>
+  drop_na()
+
+#remove all the gapfilled data to avoid strongly correlated predictors
+preds_stepwise2 <- hh_fluxes |> 
+  subset(select = -c(siteid, TIMESTAMP, GPP_NT_VUT_REF, TA_F_MDS, SW_IN_F_MDS, VPD_F_MDS)) |>
+  drop_na()
+
+#take out PPFD_since it was the most important predictor for the single model
+preds_stepwise3 <- hh_fluxes |> 
+  subset(select = -c(siteid, TIMESTAMP, GPP_NT_VUT_REF, TA_F_MDS, SW_IN_F_MDS, VPD_F_MDS, PPFD_IN)) |>
+  drop_na()
+```
+
+Calculate stepwise linear regression models using the three predictors sets defined above
+```{r calculate_stepwise, message = F, warning=F}
+linmod1 <- stepwise_regression(preds_stepwise1, hh_fluxes, "GPP_NT_VUT_REF")
+linmod2 <- stepwise_regression(preds_stepwise2, hh_fluxes, "GPP_NT_VUT_REF")
+linmod3 <- stepwise_regression(preds_stepwise3, hh_fluxes, "GPP_NT_VUT_REF")
+```
+
+# Discussion
+
+First, let's look at the metrics of the four models that were fitted.
+```{r metrics, echo=F}
+compute_regr_metrics <- function(mod){
+  
+  p <- length(mod$coefficients)
+  n <- length(mod$residuals)
+  
+  tibble(
+    mse = mean(mod$residuals^2),
+    rmse = sqrt(mean(mod$residuals^2)),
+    R2 = summary(mod)$r.squared,
+    R2_adj = summary(mod)$adj.r.squared,
+    AIC = extractAIC(mod)[2],
+    AIC_adj = extractAIC(mod)[2] + 2*(p+2)*(p+3)/(n-p-3),
+    BIC = BIC(mod) # this implementation is based on log-likelihood
+  )
+}
+
+list_metrics <- purrr::map(
+    list(linmod_single, linmod1, linmod2, linmod3), 
+    ~compute_regr_metrics(.))
+names(list_metrics) <- c("1. Linear model single predictor", 
+                         "2. Linear model stepwise, all predictors", 
+                         "3. Linear model stepwise, gapfilled removed",
+                         "4. Linear model stepwise, gapfilled and PPFT removed")
+df_metrics <- bind_rows(list_metrics, .id = "type")
+
+knitr::kable(df_metrics, caption = "Table 1: Metrics of the different linear models", digits = 3, "simple")
+```
+As table 1 shows, the last stepwise linear model (with removed gapfilled data and PPFT variable) has the lowest errors (MSE and RMSE). However, model 2 (multivariate model using all predictors) shows a slightly better $R^2$ value, indicating better model fit or consistency and lower variance, respecitvely. The 3rd model shows the best generalizability, having the lowest AIC and BIC values. This is probably because AIC and BIC penalize high numbers of predictors. 
+It is remarkable that removing PPFT in model 4 leads to the lowest error scores in multivariate models, even though PPFT was selected as the best single predictor in model 1.
+
+
+To better understand the linear models, here are descriptions of the variables in the FLUXNET dataset.
+More info on: https://fluxnet.org/data/fluxnet2015-dataset/fullset-data-product/
+* **GPP_NT_VUT_REF**: Gross Primary Production, from Nighttime partitioning method, reference selected from GPP versions using model efficiency (MEF). The MEF analysis is repeated for each time aggregation
+* TA: Air Temperature [°C]
+* SW_IN: Incoming Shortwave Radiation [W m-2]
+* LW_IN: Incoming Longwave Radiation [W m-2]
+* VPD: Vapour Pressure Deficit [hPa]
+* PA: Atmospheric pressure [kPa]
+* P: Precipitation [mm]
+* WS: Wind speed [m s-1]
+* CO2: CO2 mole fraction [umolCO2 mol-1]
+* PPFD: Photosynthetic photon flux density, incoming
+* USTAR: Friction velocity [m s-1]
+
+And the suffixes 
+* MDS: gapfilled using MDS
+* F: consolidated, usually with ERA data
+```{r summaries, echo=F}
+library(jtools)
+print("2. Linear model stepwise, all predictors") 
+summ(linmod1)
+print("3. Linear model stepwise, gapfilled removed")
+summ(linmod2)
+print("4. Linear model stepwise, gapfilled and PPFT removed")
+summ(linmod3)
+```
+All 10 predictor variables got chosen for the final model. Since the predictors were preselected, removing out gapfilled predictors (when non-gapfilled data of the same indicator was available), a large part of the strongly correlated predictors were already eliminated before fitting the linear regression. 
+
+Interestingly model 2 and 3 show exactly the same variable order (except for the last one), however, model 2 uses gap-filled air temperature as opposed to model 3 that uses the normal TA_F. The predictor set of model two consisted of duplicate predictors (gap-filled and non-gapfilled), which correlate strongly with each other. The fact that model 2 did nevertheless not chooses the same predictor twice except for TA, shows that this would not have added to the model performance, because the two predictors are covarying. However, on their own, the predictors that weren't chosen, would possibly still be important for the model (see chapter 8.2.2.1, AGDS script).
+
+Contrarily to what was mentioned in the AGDS script in chapter 9.2.7.2, longwave radiation seems to be an important predictor for GPP. However, this could also have to do with LW's covariance with other predictors.
+
+
+
+
+When discussing results, consider why a certain variable was not chosen in the final model. How do non-included variables relate to variables that are included? How do the model metrics change when adding variables? Can you explain their patterns with your statistical knowledge?
+
+
+
