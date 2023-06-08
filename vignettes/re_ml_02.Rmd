@@ -6,7 +6,7 @@ output:
  html_document:
     toc: yes
     toc_float: yes
-    number_sections : yes
+    number_sections: yes
 ---
 
 # Introduction
@@ -33,7 +33,7 @@ library(zoo)
 ## Data Wrangling
 Daily fluxes datasets from the FLUXNET network for the two sites Davos and Laegern are loaded and wrangled.
 Because the timeseries of Davos (1997-2014) is longer than the one of Laegern (2004-2014), we crop the Davos dataset until 2004 as well to ensure comparability of the two models.
-```{r wrangle, include=T, message=F}
+```{r wrangle_Dav, include=T, message=F}
 daily_fluxes_Dav <- read_csv("../data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv") |>  
   
   # select only the variables we are interested in
@@ -68,15 +68,9 @@ daily_fluxes_Dav <- read_csv("../data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-201
   filter(year(TIMESTAMP) > 2003)
 ```
 
-```{r hist_GPP, warning=F, message=F, fig.cap="Figure 1: Histogram of GPP observation values"}
-# Data cleaning: looks ok, no obviously bad data
-# no long tail, therefore no further target engineering
-daily_fluxes_Dav |> 
-  ggplot(aes(x = GPP_NT_VUT_REF, y = after_stat(count))) + 
-  geom_histogram()
-```
 
-```{r wrangle, include=T, message=F}
+
+```{r wrangle_Lae, include=T, message=F}
 daily_fluxes_Lae <- read_csv("../data/FLX_CH-Lae_FLUXNET2015_FULLSET_DD_2004-2014_1-4.csv") |>  
   
   # select only the variables we are interested in
@@ -108,20 +102,47 @@ daily_fluxes_Lae <- read_csv("../data/FLX_CH-Lae_FLUXNET2015_FULLSET_DD_2004-201
   select(-ends_with("_QC"))
 ```
 
-```{r hist_GPP, warning=F, message=F, fig.cap="Figure 1: Histogram of GPP observation values"}
+```{r vismiss, warning=F, message=F, fig.show="hold", out.width="50%", fig.cap="Figure 1a+b: Missing data in the Davos and Laegern datasets", }
+visdat::vis_miss(
+  daily_fluxes_Dav,
+  cluster = FALSE, 
+  warn_large_data = FALSE
+  )
+visdat::vis_miss(
+  daily_fluxes_Lae,
+  cluster = FALSE, 
+  warn_large_data = FALSE
+  )
+```
+
+We have to drop P_F in Laegern, since it is completely NA
+```{r}
+daily_fluxes_Lae <- daily_fluxes_Lae |>
+  select(-P_F)
+```
+
+```{r hist_GPP, warning=F, message=F, fig.cap="Figure 2: Histogram of GPP observation values in Davos"}
 # Data cleaning: looks ok, no obviously bad data
 # no long tail, therefore no further target engineering
-daily_fluxes_Lae |> 
-  ggplot(aes(x = GPP_NT_VUT_REF, y = after_stat(count))) + 
-  geom_histogram()
+combined_data <- bind_rows(
+  daily_fluxes_Dav %>% mutate(Location = "Dav"),
+  daily_fluxes_Lae %>% mutate(Location = "Lae")
+)
+
+ggplot(combined_data, aes(x = GPP_NT_VUT_REF, fill = Location)) +
+  geom_histogram(binwidth = 1, position = "identity", alpha = 0.5) +
+  labs(x = "GPP_NT_VUT_REF",
+       y = "Count") +
+  scale_fill_manual(values = c("Dav" = "blue", "Lae" = "red"))
 ```
 
 
 ## Preprocessing
 The function `split_train_test` is defined, which splits the FLUXNET dataset into training and test data.
-80% of the data are used for training, 20% for testing.
-A model recipe is formulated. This will stay the same for all the models.
+80% of the data are used for training, 20% for testing for both sites for the true out-of-sample predictions.
+Three model recipes are formulated.
 ```{r preprocess, message=F, warning=F}
+set.seed(234) #for reproducibility
 # load and run the data splitting function
 source("../R/split_train_test.R")
 split_Dav <- split_train_test(data=daily_fluxes_Dav, prop=0.8)
@@ -132,22 +153,97 @@ split_Lae <- split_train_test(data=daily_fluxes_Lae, prop=0.8)
 Lae_train <- split_Lae$train
 Lae_test <- split_Lae$test
 
+#combine training data
+pool_train <- bind_rows(Dav_train, Lae_train)
+
 # Model and pre-processing formulation, use all variables but LW_IN_F
-pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
-                      data = daily_fluxes_train |> drop_na()) |> 
+pp_Dav <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = Dav_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+
+# Model and pre-processing formulation, use all variables but LW_IN_F
+pp_Lae <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = Lae_train |> drop_na()) |> 
+  recipes::step_BoxCox(all_predictors()) |> 
+  recipes::step_center(all_numeric(), -all_outcomes()) |>
+  recipes::step_scale(all_numeric(), -all_outcomes())
+
+# Model and pre-processing formulation, use all variables but LW_IN_F
+pp_pool <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = pool_train |> drop_na()) |> 
   recipes::step_BoxCox(all_predictors()) |> 
   recipes::step_center(all_numeric(), -all_outcomes()) |>
   recipes::step_scale(all_numeric(), -all_outcomes())
 ```
 
-* Compare within-site predictions and across-site predictions on the test set for both sites, considering different metrics. For across-site predictions, make sure to implement a train and test setup that enables a true out-of-sample prediction test.
+# Results
+## Within-site and across-site predictions
+*Task*
+Compare within-site predictions and across-site predictions on the test set for both sites, considering different metrics. For across-site predictions, make sure to implement a train and test setup that enables a true out-of-sample prediction test.
 
-* Train a single model with training data pooled from both sites and predict with this single model on the test data of both sites. How do the model metrics on the test set compare to the true out-of-sample setup above? Interpret differences. Is it a valid approach to perform model training like this? Use your knowledge about structure in the data and its relevance for the model training setup.
+```{r eval_within_across, message=F, warning=F, fig.cap="Figure 3: Within and across-site predictions"}
 
-* Get information about the characteristics of the two sites. What are the differences in terms of climate, vegetation, altitude, etc. between the Davos and Laegern sites? Interpret biases of the out-of-sample predictions with a view to the site characteristics.
+source("../R/eval_plot_metrics.R")
+    # predict Davos within
+    plot_metrics_Dav_within <- eval_plot_metrics(pp_Dav, Dav_train, Dav_test, "Davos", type = "Within-site")
 
+    plot_metrics_Lae_within <- eval_plot_metrics(pp_Lae, Lae_train, Lae_test, "Laegern", type = "Within-site")
 
-```{r}
+    # predict Davos across with Laegern
+    plot_metrics_Dav_across <- eval_plot_metrics(pp_Lae, Lae_train, Dav_test, "Davos", type = "Across-site")
 
+    # predict Laegern across with Davos
+    plot_metrics_Lae_across <- eval_plot_metrics(pp_Dav, Dav_train, Lae_test, "Laegern", type = "Across-site")
+    
+cowplot::plot_grid(plot_metrics_Dav_within$plot,
+                   plot_metrics_Lae_within$plot,
+                   plot_metrics_Dav_across$plot,
+                   plot_metrics_Lae_across$plot)
 ```
 
+## Predictions based on pooled training data
+*Task*
+Train a single model with training data pooled from both sites and predict with this single model on the test data of both sites. How do the model metrics on the test set compare to the true out-of-sample setup above? Interpret differences. Is it a valid approach to perform model training like this? Use your knowledge about structure in the data and its relevance for the model training setup.
+
+```{r eval_pool, message=F, warning=F, fig.cap="Figure 4: KNN models trained on pooled training data from both sites"}
+    # predict Davos with the pool training data
+    plot_metrics_Dav_pool <- eval_plot_metrics(pp_pool, pool_train, Dav_test, "Davos", type = "Across-site, pool")
+    # predict Laegern with the pool training data
+    plot_metrics_Lae_pool <- eval_plot_metrics(pp_pool, pool_train, Lae_test, "Laegern", type = "Across-site, pool")
+    
+    cowplot::plot_grid(plot_metrics_Dav_pool$plot,
+                       plot_metrics_Lae_pool$plot)
+```
+
+# Discussion
+
+*Task*
+Get information about the characteristics of the two sites. What are the differences in terms of climate, vegetation, altitude, etc. between the Davos and Laegern sites? Interpret biases of the out-of-sample predictions with a view to the site characteristics.
+
+*Answers*
+The models trained within-site (Fig. 3), have a better bias-variance trade-off than the ones trained across site. The models for Laegern also perform better in both cases The models trained on the pooled data (Fig. 4) have exactly the same metrics as the within-site (Davos) and the across-site (Laegern). I wasn't able to assess wether this is a coincidence or a consequence of the method or an error. 
+Here, it should also be further assessed and clarified how the pooled training data should be created. Because in this exercises, I combined the two individual training sets of both sites together, the model had double the amount of training data available than the models making the true out-of-sample predictions.
+The structure of the data given trough the two different sites obviously plays a role. As we saw in the histogram (Fig. 2), Laegern's observations of GPP are more dispersed over a slightly bigger range of values, while Davos' curve is narrower.
+An overview of the most important site characteristics:
+
+**CH-Dav: Davos**
+
+* Elevation(m): 	1639
+* Vegetation IGBP: 	ENF (Evergreen Needleleaf Forests: Lands dominated by woody vegetation with a percent cover >60% and height exceeding 2 meters. Almost all trees remain green all year. Canopy is never without green foliage.) 
+* Climate Koeppen: 	ET (Tundra)
+* Mean Annual Temp (°C): 	2.8
+* Mean Annual Precip. (mm): 	1062
+
+**CH-Lae: Laegern**
+
+* Elevation(m): 	689
+* Vegetation IGBP: 	MF (Mixed Forests: Lands dominated by trees with a percent cover >60% and height exceeding 2 meters. Consists of tree communities with interspersed mixtures or mosaics of the other four forest types. None of the forest types exceeds 60% of landscape.) 
+* Climate Koeppen: 	—
+* Mean Annual Temp (°C): 	8.3
+* Mean Annual Precip. (mm): 	1100
+
+Laegern, situated at lower altitude in a warmer climate and with mixed forests, will probably have a more pronounced growing season and achieve higher maximum GPP values than Davos, however Davos should have higher solar radiation through it's altitude and more GPP over the winter months.
+Thus, it may very well be that the main drivers for GPP differ between these two sites. There are also direct spatial correlations between the two sites, with variable observations that are probably shifted, such as the start of the growing season, weather fronts coming from the west and hitting Laegern before Davos, etc. These shifts could be accounted for, when training the model in a combined way.
+The higher MAE in the out-of-site prediction of Laegern could be because the model was not trained on such high values of GPP using the Davos training data. Regarding the R-squared of both across-site models, they perform almost equally in terms of variance, explaining around 50% of the model variance. 
