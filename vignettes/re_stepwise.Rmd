@@ -2,28 +2,38 @@
 title: 'Report Exercise 8: Regression'
 author: 'Noémie Wellinger'
 date: '`r Sys.Date()`'
-output: html_document
+output: 
+ html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
 ---
+# Introduction
+When fitting linear regression models, it is important to choose the best predictors to achieve good model performance. This process of finding the "best" model is referred to as "model selection". As it would be very time and resource consuming to try each combination of available predictors, there exists a "greedy" approach to this problem: the stepwise forward regression. It starts with an empty model (just an intercept) and adds one predictor at a time to the model formula - as long as the added predictor increases model performance.
+The aim of this exercises is to implement a stepwise forward regression, to understand the functionality and asses which predictors are most important for a multivariate regression model predicting GPP.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(tidyverse)
-library(ggplot2)
-
 ```
 
+# Methods and Results
+```{r libs, warning=F, message=F}
+library(tidyverse)
+library(ggplot2)
+```
 
-# Read and preprocess data
+## Read and preprocess data
 ```{r, inlude = T, warning=F, message=F}
 hh_fluxes <- readr::read_csv("https://raw.githubusercontent.com/geco-bern/agds/main/data/df_for_stepwise_regression.csv")
 ```
 
-```{r missing, fig.cap = "Figure 1: Missing values in the whole dataset" }
-visdat::vis_miss(
+```{r missing_vals, fig.cap = "Figure 1: Missing values in the whole dataset" }
+plot_na <- visdat::vis_miss(
   hh_fluxes,
   cluster = FALSE, 
   warn_large_data = FALSE
   )
+plot_na
 ```
 The variable LW_IN_F_MDS contains a lot of missing values. As noted in the AGDS script in chapter 9.2.7.2, longwave radiation is not a  strong factor for GPP and there is another non-gapfilled version of the same variable. Therefore we can drop the variable for all the subsequent models.
 
@@ -32,8 +42,6 @@ hh_fluxes <- hh_fluxes |>
   subset(select = -LW_IN_F_MDS)
 ```
 
-
-# Analysis
 ## Evaluation of all bivariate models (single predictor)
 ```{r bivariate, warning=F}
 #initialize the predictors
@@ -67,6 +75,7 @@ linmod_single <- lm(formula = as.formula(paste("GPP_NT_VUT_REF ~", max_rsq_pred)
            data = hh_fluxes)
 
 ```
+
 ```{r plot_lm_single, echo = F, fig.cap = "Figure 2: Best bivariate linear regression model for GPP", warning=F}
 hh_fluxes |>
   #filter(MONTH == 8) |>
@@ -77,18 +86,18 @@ hh_fluxes |>
   theme_classic()
 ```
 
-
-
 ## Stepwise regression
-1. Set the number of predictors to be considered to p=1
-2. Fit all regression models with p predictors and compute their R2
-3. Select the model with p predictors that achieves the highest R2 (best fitting model) and compute its AIC.
-4. Increment to p+1. 
-   Fit all regression models with p+1 predictors and compute their R2. 
-   Select the best fitting model and compute its AIC.
-5. If the AIC of the model with p+1 predictors is poorer than the AIC of the model with p predictors, 
-   retain the model with p predictors and quit. 
-   You have found the (presumably) optimal model. Otherwise, continue with with step 4. 
+The stepwise regression works as follows (steps from the AGDS script, section 8.2.3.1):
+
+  1. Set the number of predictors to be considered to p=1
+  2. Fit all regression models with p predictors and compute their R2
+  3. Select the model with p predictors that achieves the highest R2 (best fitting model) and compute its AIC.
+  4. Increment to p+1. 
+     Fit all regression models with p+1 predictors and compute their R2. 
+     Select the best fitting model and compute its AIC.
+  5. If the AIC of the model with p+1 predictors is poorer than the AIC of the model with p predictors, 
+     retain the model with p predictors and quit. 
+     You have found the (presumably) optimal model. Otherwise, continue with with step 4. 
 
 
 The stepwise regression function is implemented in the R file `stepwise_regression.R`.
@@ -151,12 +160,15 @@ df_metrics <- bind_rows(list_metrics, .id = "type")
 
 knitr::kable(df_metrics, caption = "Table 1: Metrics of the different linear models", digits = 3, "simple")
 ```
-As table 1 shows, the last stepwise linear model (with removed gapfilled data and PPFT variable) has the lowest errors (MSE and RMSE). However, model 2 (multivariate model using all predictors) shows a slightly better $R^2$ value, indicating better model fit or consistency and lower variance, respecitvely. The 3rd model shows the best generalizability, having the lowest AIC and BIC values. This is probably because AIC and BIC penalize high numbers of predictors. 
-It is remarkable that removing PPFT in model 4 leads to the lowest error scores in multivariate models, even though PPFT was selected as the best single predictor in model 1.
+
+
+As Table 1 shows, the last stepwise linear model (with removed gapfilled data and PPFT variable) has the lowest errors (MSE and RMSE). However, model 2 (multivariate model using all predictors) shows a slightly better $R^2$ value, indicating better model fit or consistency and lower variance, respecitvely. The 3rd model shows the best generalizability, having the lowest AIC and BIC values. This is probably because AIC and BIC penalize high numbers of predictors. 
+It is remarkable that removing PPFT in model 4 leads to the lowest error scores in multivariate models, even though PPFT was selected as the best single predictor in model 1. The explanation for this is not entirely clear to me at this point. Maybe PPFT works well as a single predictor but not so well when combined with other predictors.
 
 
 To better understand the linear models, here are descriptions of the variables in the FLUXNET dataset.
 More info on: https://fluxnet.org/data/fluxnet2015-dataset/fullset-data-product/
+
 * **GPP_NT_VUT_REF**: Gross Primary Production, from Nighttime partitioning method, reference selected from GPP versions using model efficiency (MEF). The MEF analysis is repeated for each time aggregation
 * TA: Air Temperature [°C]
 * SW_IN: Incoming Shortwave Radiation [W m-2]
@@ -170,8 +182,12 @@ More info on: https://fluxnet.org/data/fluxnet2015-dataset/fullset-data-product/
 * USTAR: Friction velocity [m s-1]
 
 And the suffixes 
+
 * MDS: gapfilled using MDS
 * F: consolidated, usually with ERA data
+
+Let's take a closer look at the 3 multivariate models fitted with the stepwise regression:
+
 ```{r summaries, echo=F}
 library(jtools)
 print("2. Linear model stepwise, all predictors") 
@@ -181,16 +197,12 @@ summ(linmod2)
 print("4. Linear model stepwise, gapfilled and PPFT removed")
 summ(linmod3)
 ```
-All 10 predictor variables got chosen for the final model. Since the predictors were preselected, removing out gapfilled predictors (when non-gapfilled data of the same indicator was available), a large part of the strongly correlated predictors were already eliminated before fitting the linear regression. 
 
-Interestingly model 2 and 3 show exactly the same variable order (except for the last one), however, model 2 uses gap-filled air temperature as opposed to model 3 that uses the normal TA_F. The predictor set of model two consisted of duplicate predictors (gap-filled and non-gapfilled), which correlate strongly with each other. The fact that model 2 did nevertheless not chooses the same predictor twice except for TA, shows that this would not have added to the model performance, because the two predictors are covarying. However, on their own, the predictors that weren't chosen, would possibly still be important for the model (see chapter 8.2.2.1, AGDS script).
+9 out of 10 predictor variables got chosen for the final model. Since the predictors were preselected, removing gapfilled predictors (when non-gapfilled data of the same indicator was available), a large part of the strongly correlated predictors were already eliminated before fitting the linear regression. 
+
+Interestingly model 2 and 3 show exactly the same variable order (except for the last one), however, model 2 uses gap-filled air temperature as opposed to model 3 that uses the normal TA_F. The predictor set of model two consisted of duplicate predictors (gap-filled and non-gapfilled), which correlate strongly with each other. The fact that model 2 did nevertheless not choose the same predictor twice except for TA, shows that this would not have added to the model performance, because the two predictors are covarying. However, on their own, the predictors that weren't chosen, would possibly still be important for the model (see chapter 8.2.2.1, AGDS script).
+
+Since all the variables have a p value of p < 0.05, we can assume that they are statistically significant and there exists an effect of the variable on GPP.
 
 Contrarily to what was mentioned in the AGDS script in chapter 9.2.7.2, longwave radiation seems to be an important predictor for GPP. However, this could also have to do with LW's covariance with other predictors.
-
-
-
-
-When discussing results, consider why a certain variable was not chosen in the final model. How do non-included variables relate to variables that are included? How do the model metrics change when adding variables? Can you explain their patterns with your statistical knowledge?
-
-
 

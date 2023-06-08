@@ -6,7 +6,7 @@ output:
  html_document:
     toc: yes
     toc_float: yes
-    number_sections : yes
+    number_sections: yes
 ---
 # Introduction
 In this exercise, basic implementation steps of supervised machine learning are explored. These include pre-processing data, model fitting, testing the model’s generasbility to unseen data and evaluating model hyperparameters such as k in an KNN model.
@@ -149,6 +149,8 @@ eval_model(mod = mod_lm, df_train = daily_fluxes_train, df_test = daily_fluxes_t
 eval_model(mod = mod_knn, df_train = daily_fluxes_train, df_test = daily_fluxes_test, plots = "temporal")
 ```
 
+The LM and KNN show very similar temporal variations. They both fail to predict high peaks and low peaks. The MAE is usually below 0 in summer and above 0 in winter. 
+
 # The role of K
 Let’s look at the role of k in a KNN and answer the following questions:
 
@@ -156,12 +158,14 @@ Let’s look at the role of k in a KNN and answer the following questions:
 1. Based on your understanding of KNN (and without running code), state a hypothesis for how the R2 and the MAE evaluated on the test and on the training set would change for k approaching 1 and for k approaching N (the number of observations in the data). Explain your hypothesis, referring to the bias-variance trade-off.
 
 *K approaching 1*
-* Test data: MAE would approach 0 and R2 would approach 1. The predictions would be perfectly fitted to the training data.
-* Training data: MAE would increase drastically and R2 would decrease, because the model heavily is overfitted to the training data.
+
+* Training data: MAE would approach 0 and R2 would approach 1. The predictions would be perfectly fitted to the training data.
+* Test data: MAE would increase drastically and R2 would decrease, because the model heavily is overfitted to the training data.
 
 *K approaching N*
-* Test data: MAE would approach the mean value of all observations and R2 would approach 0.
-* Training data: same as for the test data. 
+
+* Training data: MAE would approach the mean value of all observations and R2 would approach 0.
+* Test data: same as for the training data. 
 
 ## Evaluation of different k values
 Put your hypothesis to the test! Write code that splits the data into a training and a test set and repeats model fitting and evaluation for different values for k. Visualise results, showing model generalisability as a function of model complexity. Describe how a “region” of overfitting and underfitting can be determined in your visualisation. Write (some of your) code into a function that takes k as an input and and returns the MAE determined on the test set.
@@ -194,7 +198,7 @@ knn_tuning2 <- knn_tune_K(pp, daily_fluxes_train, daily_fluxes_test, k_vals)
 ```{r plot_knn,warning=F, message=F, fig.cap="Figure 6: Model generalisability as a function of model complexity" }
 cowplot::plot_grid(knn_tuning1$plot, knn_tuning2$plot)
 ```
-Overfitting is clearly visible in the plots, where the metrics of the train and test datasets strongly diverge. This is the case for k values approaching 0. As they come closer to each other, and errors are minimized as welle as R-squared maximized, we reach the sweet spot of bias-variance trade-off. With increasing k values, the errors increase and R-squared decrease again, indicating underfitting. The knn model failed to compute with a k-value of 500, which is why the left plot (Fig. 6) only reaches until 400.
+Overfitting is clearly visible in the plots, where the metrics of the train and test datasets strongly diverge. This is the case for k values approaching 0. As they come closer to each other, and errors are minimized as well as R-squared maximized, we reach the sweet spot of bias-variance trade-off. With increasing k values, the errors increase and R-squared decrease again, indicating underfitting. The knn model failed to compute with a k-value of 500, which is why the left plot (Fig. 6) only reaches until 400.
 
 ## The optimal k
 We are looking for a k that minimizes the RMSE and maximizes R-squared on the test set.
