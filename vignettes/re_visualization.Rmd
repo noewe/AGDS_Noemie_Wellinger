@@ -1,58 +1,60 @@
 ---
-title: "Telling a story from data"
+title: "Report Exercise 4: Data Visualization - Telling a story from data"
 author: 'Noémie Wellinger'
 date: "`r Sys.Date()`"
-output: html_document
+output: 
+ html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
 ---
 
-In the previous exercises and tutorials, you have learned how to wrangle data, fit simple linear regression models and identify outliers, create figures for temporal patterns, and develop and test hypotheses. Use these skills to tell a story about the airquality dataset (directly available in R, just type datasets::airquality into the console).
+# Introduction
+The previous exercises have covered data wrangling, simple linear regression models, identifying outliers, creating figures, and the formulation as well as testing of hypotheses. In this exercises, these skills are now used to tell a story about the airquality dataset.
 
-Your solution has to include:
-
-    At least three publishable figures that show important patterns (e.g., outliers, temporal patterns, scatterplots of correlations, etc.)
-    A description of the data that includes at least three statistical metrics that are relevant for the problem (argue for why you chose these metrics).
-    Interpretation and discussion of your results and hypotheses. The text alone should not exceed one A4 page (max. 400 words).
-
-    Hint: To get more background information on the data, use the help functionalities in RStudio.
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-library("PerformanceAnalytics")
-library(dplyr)
-library(ggplot2)
-library(tidyverse)
-```
-
-```{r read}
-airqual <- datasets::airquality
-airqual <- airqual |>
-  mutate(row_n = c(1:length(Day)),
-         Temp_C = round((5/9)*(Temp - 32),1)) 
-airqual
-```
+The solution has to include:
+* At least three publishable figures that show important patterns (e.g., outliers, temporal patterns, scatterplots of correlations, etc.)
+* A description of the data that includes at least three statistical metrics that are relevant for the problem (argue for why you chose these metrics).
+* Interpretation and discussion of your results and hypotheses. The text alone should not exceed one A4 page (max. 400 words).
 
 The dataset is a 5-month daily time series (May - September) of New York air quality measurements of an unspecified year. It includes temperature [°F], wind, solar radiation and ozone concentration.
-Since ozone poses health problems, especially during hot summer days, I want to know, which of the 3 other factors correlate the most with the ozone concentration and could possibly be a causality for it.
+Since ozone causes health problems, especially during hot summer days, I want to know, which of the 3 other factors correlate the most with the ozone concentration and could possibly be a causality for it.
 
 Hypotheses: 
 1. Solar radiation influcences ozone concentration.
 2. High wind speeds lower the ozone concentration.
 
-```{r}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Methods and Results
+```{r libs, message=F, warning = F}
+library(PerformanceAnalytics)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+Read in the dataset, which is part of the Base R datasets. Temperatures are converted to °C.
+```{r read}
+airqual <- datasets::airquality
+airqual <- airqual |>
+  mutate(row_n = c(1:length(Day)),
+         Temp_C = round((5/9)*(Temp - 32),1)) 
+```
+
+To get an overview, a correlation matrix is plotted.
+```{r cor_plot, warning=F, message=F, fig.cap="Figure 1: Correlation matrix of airquality data. On the top/right the (absolute) value of the correlation plus the result of the cor.test as stars. On the bottom/left, the bivariate scatterplots, with a fitted line. The number of observations are shown as histograms."}
 airqual_values <- airqual |>
   select(Ozone, Solar.R, Temp, Wind) 
 
-pairs(airqual_values)
-
-cor(airqual_values, use = "complete.obs")
-
-chart.Correlation(airqual_values, histogram=TRUE, pch=19)
+# pairs(airqual_values)
+# cor(airqual_values, use = "complete.obs")
+chart.Correlation(airqual_values, histogram=TRUE, pch=19, method = "pearson")
 ```
 Looking at all the variables paired up in scatterplots, there seems to be a correlation between ozone and temperature, ozone and wind, as well as a slight correlation between ozone and solar radiation.
-
-
-
-```{r}
+```{r plot_temporal, message = F, warning = F, fig.width=10}
 scale = 10
 
 ggplot(airqual) +
@@ -70,76 +72,57 @@ ggplot(airqual) +
   scale_y_continuous(name = "Temperature and ozone", sec.axis = sec_axis(~.*scale, name = "Wind & solar radiation")) +
   
   labs(
-    title = "Fig 1: Temporal pattern of variables of interest",
-    x = "Days") +
+    x = "Days",
+    caption="Figure 2: The temporal patterns of the variables of interest.") +
   theme_classic() +
   coord_fixed(ratio = 1) +
 
-  theme(legend.position = c(0.88, 1.5) ) + # Move legend into the plot
+  theme(legend.position = c(0.9, 1.2) ) + # Move legend into the plot
   scale_color_manual(
      "", # Omit legend title
     values = c("turquoise", "yellowgreen", "salmon", "purple"),
-    labels = c("Ozone concentration",  "Solar radiation", "Temperature [°C]", "Wind speed")
-  )
-
-
+    labels = c("Ozone concentration",  "Solar radiation", "Temperature [°C]", "Wind speed")) +
+   theme(plot.caption = element_text(hjust = 0)) # move caption to the left
 ```
 
-```{r}
+```{r plot2, warning=F, message=F, fig.show="hold", out.width="50%", fig.cap="Figure 3: a) Ozone concentration for varying temperatures and wind speeds and b) depending on temperature and solar radiation. Unhealthy levels of ozone over 70ppb are indicated as triangles."}
+
 airqual |>
   drop_na(Ozone) |>
-ggplot(
-  aes(x = Temp_C, y = Wind, color = Ozone)) +
+  ggplot(aes(x = Temp_C, y = Wind, color = Ozone, shape = Ozone > 70)) +
   geom_point(size = 3) +
-  labs(title = "a) Ozone concentration for varying temperatures and wind speeds",
+  labs(title = "a)",
        x = "Temperature (°C)",
        y = "Wind speed (mph)") +
   theme_classic() +
   scale_color_viridis_c() +
+  scale_shape_manual(values = c(16, 17)) + 
   coord_fixed(ratio = 1)
 
 airqual |>
   drop_na(Ozone) |>
-ggplot(
-  aes(x = Temp_C, y =Solar.R, color = Ozone)) +
+  ggplot(aes(x = Temp_C, y = Solar.R, color = Ozone, shape = Ozone > 70)) +
   geom_point(size = 3) +
-  labs(title = "b) Ozone concentration depending on T and SR",
+  labs(title = "b)",
        x = "Temperature (°C)",
        y = "Solar Radiation") +
   theme_classic() +
   scale_color_viridis_c() +
-    coord_fixed(ratio = 0.05)
-
-
-```
-Scatterplot a) shows that high ozone concentrations mostly occur on hot days with low wind speed.
-According to scatterplot b), the temperature is essential for the formation of ozone. High solar radiation alone, is not enough to produce ozone molecules.
-
-
-
-Let's find out if a decrease in ozone from one to the next day correlates with a high wind speed as well.
-
-```{r}
-airqual |>
-  mutate(ozone_change = round((((Ozone - lag(Ozone))/lag(Ozone))*100),1)) |>
-  ggplot(
-      aes(x = Ozone, y = ozone_change, color = lag(Wind))) +
-  geom_point(size = 3) +
-  labs(title = "Ozone concentration for varying temperatures and wind speeds",
-       x = "Ozone",
-       y = "Change in Ozone (%)") +
-  theme_classic() +
-  scale_color_viridis_c()
+  scale_shape_manual(values = c(16, 17)) +
+  coord_fixed(ratio = 0.05)
 ```
 
-WHile stratospheric ozone protects us from harmful UV-radiation, tropospheric ozone in high concentrations is harmful to plants and animals. The natural ozone concentration in the troposphere is ca. 10 parts per billion (ppb). 
-According to the Environmental Protection Agency, concentration of 70 ppb for over 8 hours poses health risks. 
-Tropospheric ozone is formed when anthropogenic emissions react with volatile organic compounds, a process which is reinforced during warm and stable atmospheric conditions [1]
 
-Let's mark the ozone concentrations which exceed 70ppb (disregarding the time of exposure). 
-
-Disclosure of assumption:
-Since the dataset is US-American, I assume that the wind speed is measured in miles per hour (mph)
+The scatterplot in Fig 3.a shows that high ozone concentrations mostly occur on hot days with low wind speed.
+According to the scatterplot in Fig.3b, the temperature is essential for the formation of ozone. High solar radiation alone, is not enough to produce ozone molecules.
 
 
-[1] 
+
+# Discussion
+When looking at the temporal plot (Fig. 2) of our variables of interest, it is difficult to notice correlations. The correlations and plots in Figure 1 suggest a correlation between ozone and temperature, ozone and wind, as well as a slight correlation between ozone and solar radiation. Ozone concentration decreases with wind speed and increases with temperature. This is in line with the explanations of the Environmental Protection Agency [1]: Tropospheric ozone is formed when anthropogenic emissions react with volatile organic compounds, a process which is reinforced during warm and stable atmospheric conditions. While stratospheric ozone protects us from harmful UV-radiation, tropospheric ozone in high concentrations is harmful to plants and animals. The natural ozone concentration in the troposphere is ca. 10 parts per billion (ppb). According to the Environmental Protection Agency, concentration of 70 ppb for over 8 hours poses health risks [1]. These levels are exceeded on a number of days, with ozone concentrations of up to 160 ppb. Over ~32°C, ozone concentration always exceeds the safe level (Fig. 3a+b).
+When looking at the ozone concentration as a function of wind speed and temperature (Fig. 3a) and solar radiation and temperature (Fig. 3b), respectively, clusters of high ozone concentration are noticeable: they mainly occur on days with high temperatures and low wind speed and on days with high temperatures and high solar radiation (although it has to be noted that high temperatures by themselves already correlate with lower wind speed and higher solar radiation).
+In Figure 4, 
+
+
+# References
+[1] EPA (2023). Ground-level Ozone Basics. Available at: https://www.epa.gov/ground-level-ozone-pollution/ground-level-ozone-basics (Accessed: 08 June 2023). 
